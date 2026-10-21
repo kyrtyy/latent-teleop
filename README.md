@@ -17,6 +17,7 @@ through a simulated delayed network.
 | `train.py` | trains probe only (`--probe-only`) or predictor + probe with teacher-forcing + 20-step rollout loss |
 | `eval_g1.py` | error vs horizon, learned vs hold / constant-velocity / kinematic, writes the G1 verdict and chart |
 | `probe_check.py` | perception-floor diagnostics (MLP vs spatial probe vs raw pixels) |
+| `leak_check.py` | re-runs the G1 rollout with corrupted future commands, per delay profile |
 | `smoke.sh` | end-to-end run on tiny data; must print `SMOKE OK` |
 | `fleet.sh` | push code to servers, build the venv, run the self-checks: `./fleet.sh 91 70 55` |
 | `prototype/` | the original 400-line prototype, kept for reference (superseded) |
@@ -60,7 +61,7 @@ G1 **PASSES** if all of these hold on the test episodes (every 10th episode):
 If G1 fails, the next phase narrows (for example, the ghost shows the block only within the horizon where it
 beats hold) rather than stopping.
 
-## Status (2026-10-21)
+## Status before the full run (2026-10-21)
 
 Verified:
 - Self-checks pass on 7 servers: .91, .70, .55, .87 (RTX 3050, bf16) and .54, .63, .100 (GTX 1660 Super, fp32).
@@ -96,22 +97,31 @@ Known limits carried into C2:
   conditioning via the action timeline instead of as a network input; DINOv2-S instead of V-JEPA 2 (too slow on
   6 GB cards); C2–C4 not built yet.
 
-## Full G1 run (not started; waiting for the go)
+## G1 results (2026-10-22)
 
-| stage | time on one RTX 3050 | output |
-|---|---|---|
-| collect 1200 episodes (6 delay profiles × 200) | ~1 min (CPU) | `data/episodes/` (~0.3 GB) |
-| embed ~708k frames, DINOv2-S, 8×8 | ~20 min | `data/emb_p8.npy` (~35 GB, memory-mapped) |
-| probe-only floor check | ~15 min | `data/probe.log`: the floor number appears here |
-| predictor + probe, 40k steps × batch 16 | ~10 h | `data/wm_<tag>.pt`, `data/train_<tag>.log` |
-| G1 eval | ~10 min | `results/<tag>/g1.png`, `g1_metrics.csv`, `g1_verdict.json` |
+Main run (.55, 40k steps, ~10 h) and the no-rollout-loss ablation (.70). Test split, block-moving windows,
+learned model vs the best baseline reading the *true* state (`results/<tag>/g1_verdict.json`):
 
-Plan: the main run on .91 and the no-rollout-loss ablation on .70, in parallel (each builds its own identical data):
+| | main | ablation (`--rollout-weight 0`) | best baseline |
+|---|---|---|---|
+| block px, 300 ms | **6.9** (0.65x) | 12.8 (1.21x) | 10.6 (const-vel) |
+| block deg, 300 ms | **3.2** (0.40x) | 7.7 (0.95x) | 8.1 (const-vel) |
+| block px, 600 ms | **7.2** (0.40x) | 17.8 (1.00x) | 17.9 (hold) |
+| block deg, 600 ms | **4.0** (0.28x) | 11.4 (0.80x) | 14.2 (hold) |
 
-```bash
-ssh yashdewangan@10.81.30.91 'cd ~/aktoria_teleop && nohup ./run_g1.sh main > run_main.log 2>&1 &'
-ssh yashdewangan@10.81.30.70 'cd ~/aktoria_teleop && nohup ./run_g1.sh no_rollout --rollout-weight 0 > run_no_rollout.log 2>&1 &'
-```
+**G1: FAIL only on condition 1** (perception floor 4.7 px / 1.8°, gate < 3 px). Condition 2 passes on all four
+cells, with margin. The rollout loss is what makes the predictor useful: the teacher-forced ablation is no better
+than hold. Of the learned 7.2 px, about 4.7 px is the probe floor. In free space hold is exact and the learned
+model sits at the floor, so the ghost should show the learned block only when contact is expected.
+
+**Leak check** (`leak_check.py`): corrupt the future commands and the win disappears (600 ms block: true commands
+7.2 px, last command held 14.7, commands from another window 17.3, hold-last-frame 17.9). The win is
+action-driven dynamics, not future frames. It also holds under 300 ms delay (7.4 vs 14.2 px), where the window's
+commands were issued from pre-anchor frames, so the commands cannot carry the operator's reaction to the future
+block.
+
+`train.py` saves `<out>.resume` every eval and resumes from it. The first main run on .91 was killed at
+step 26k (no traceback, a desktop user had logged in) and was rerun on .55.
 
 ## Running
 
