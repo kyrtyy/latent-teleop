@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+data*/
+results*/
+*.pt
+*.pth
+CV.md

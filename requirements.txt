@@ -1,0 +1,11 @@
+# Versions verified on Ubuntu 26.04 + RTX 3050 / CUDA 13.2 driver, Python 3.12 (see fleet.sh)
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+gym-pusht==0.1.8
+gymnasium==1.4.0
+pymunk==6.11.1
+pygame==2.6.1
+shapely==2.2.0
+numpy==2.2.6
+transformers==5.20.2
+matplotlib==3.11.2
