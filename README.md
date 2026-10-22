@@ -109,7 +109,7 @@ learned model vs the best baseline reading the *true* state (`results/<tag>/g1_v
 | block px, 600 ms | **7.2** (0.40x) | 17.8 (1.00x) | 17.9 (hold) |
 | block deg, 600 ms | **4.0** (0.28x) | 11.4 (0.80x) | 14.2 (hold) |
 
-**G1: FAIL only on condition 1** (perception floor 4.7 px / 1.8°, gate < 3 px). Condition 2 passes on all four
+**With the original probe, G1 fails only on condition 1** (perception floor 4.7 px / 1.8°, gate < 3 px). Condition 2 passes on all four
 cells, with margin. The rollout loss is what makes the predictor useful: the teacher-forced ablation is no better
 than hold. Of the learned 7.2 px, about 4.7 px is the probe floor. In free space hold is exact and the learned
 model sits at the floor, so the ghost should show the learned block only when contact is expected.
@@ -119,6 +119,20 @@ model sits at the floor, so the ghost should show the learned block only when co
 action-driven dynamics, not future frames. It also holds under 300 ms delay (7.4 vs 14.2 px), where the window's
 commands were issued from pre-anchor frames, so the commands cannot carry the operator's reaction to the future
 block.
+
+**Perception floor fix → G1 PASS** (`floor.sh`, 2026-10-22). Only the probe is retrained, on true frames from 4×
+the episodes (4,800; episodes 0–1199 are bit-identical to `data/`, so the test split is unchanged and unseen).
+The predictor is the same `wm_main.pt`. Results are scored on the original test set:
+
+| probe | floor block px / deg | block px / deg @ 600 ms, moving (ratio) | G1 |
+|---|---|---|---|
+| 1,200 eps, 20k steps | 4.71 / 1.84 | 7.2 / 4.0 (0.40 / 0.28) | FAIL (floor) |
+| 4,800 eps, 60k steps | 3.27 / 1.18 | 6.3 / 3.1 (0.35 / 0.22) | FAIL (floor) |
+| 4,800 eps, 150k steps | **2.97 / 1.13** | **6.2 / 2.8 (0.34 / 0.20)** | **PASS** |
+
+Caveat: condition 1 passes by 0.03 px, with one seed and on the third probe tried. Condition 2 is the robust result
+(every cell ≤ 0.54×). The data-scaling rate for the floor dropped (4× data gave only −30%), so the next gain is a
+finer readout (unpooled 16×16 tokens), not more episodes.
 
 `train.py` saves `<out>.resume` every eval and resumes from it. The first main run on .91 was killed at
 step 26k (no traceback, a desktop user had logged in) and was rerun on .55.
