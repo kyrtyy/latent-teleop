@@ -22,13 +22,14 @@ ap.add_argument("--ckpt")
 ap.add_argument("--probe-ckpt", help="standalone probe (train.py --probe-only); default <data>/probe_p<pool>.pt")
 ap.add_argument("--stride", type=int, default=3, help="anchor every n ticks")
 ap.add_argument("--out", default="results")
+ap.add_argument("--K", type=int, help="horizon in ticks; past the trained K the rollout is chained")
 args = ap.parse_args()
 os.makedirs(args.out, exist_ok=True)
 dev = "cuda"
 
 ck = torch.load(args.ckpt or f"{args.data}/wm_p{args.pool}.pt", weights_only=False)
-H, K, n_tok = ck["args"]["H"], ck["args"]["K"], ck["n_tok"]
-model, probe = Predictor(n_tok, max_t=H + K).to(dev).eval(), Probe(n_tok).to(dev).eval()
+H, K, n_tok = ck["args"]["H"], args.K or ck["args"]["K"], ck["n_tok"]
+model, probe = Predictor(n_tok, max_t=H + ck["args"]["K"]).to(dev).eval(), Probe(n_tok).to(dev).eval()
 model.load_state_dict(ck["model"])
 # one probe for the floor, the gate and decoding rollouts: trained on true frames only (encoder is frozen)
 probe.load_state_dict(torch.load(args.probe_ckpt or f"{args.data}/probe_p{args.pool}.pt", weights_only=False)["probe"])
