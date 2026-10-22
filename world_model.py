@@ -13,7 +13,7 @@ from sim import AGENT, ANGLE, BLOCK
 
 def amp():
     """bf16 autocast on Ampere (RTX 3050); plain fp32 on cards without native bf16 (GTX 1660 Super)."""
-    return torch.autocast("cuda", torch.bfloat16, enabled=torch.cuda.is_bf16_supported(including_emulation=False))
+    return torch.autocast("cuda", torch.bfloat16, enabled=torch.cuda.is_available() and torch.cuda.is_bf16_supported(including_emulation=False))
 
 
 def norm(z):
@@ -123,7 +123,17 @@ class Predictor(nn.Module):
 
 def rollout(model, z_ctx, a, k):
     """z_ctx (B, H, n, D) true frames up to the anchor; a (B, >= H+k-1, 2) commands executed at each tick.
-    Rolls k ticks past the anchor, feeding predictions back in. Returns (B, k, n, D)."""
+    Rolls k ticks past the anchor, feeding predictions back in. Returns (B, k, n, D).
+    Past the trained horizon (max_t), the rollout is chained: the newest H frames (predicted) become the next context."""
+    H, seg = z_ctx.shape[1], model.time_pos.shape[0] - z_ctx.shape[1] + 1
+    if k <= seg:
+        return _rollout(model, z_ctx, a, k)
+    first = _rollout(model, z_ctx, a, seg)
+    ctx = torch.cat([z_ctx, first], 1)[:, -H:]
+    return torch.cat([first, rollout(model, ctx, a[:, seg:], k - seg)], 1)
+
+
+def _rollout(model, z_ctx, a, k):
     H = z_ctx.shape[1]
     caches = [[] for _ in model.blocks]
     nxt = model(z_ctx, a[:, :H], 0, caches)[:, -1:]
@@ -144,4 +154,9 @@ if __name__ == "__main__":
         for _ in range(8):
             zs = torch.cat([zs, m(zs, a[:, :zs.shape[1]])[:, -1:]], 1)
         assert torch.allclose(rollout(m, z, a, 8), zs[:, 4:], atol=1e-4), "KV-cached rollout differs from naive"
+        # chained past max_t: same as rolling the first segment, then restarting from the newest 4 frames
+        a = torch.randn(3, 40, 2)
+        long, first = rollout(m, z, a, 20), rollout(m, z, a, 9)
+        assert torch.allclose(long[:, :9], first, atol=1e-4)
+        assert torch.allclose(long[:, 9:18], rollout(m, torch.cat([z, first], 1)[:, -4:], a[:, 9:], 9), atol=1e-4)
     print("world_model.py checks passed")

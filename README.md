@@ -17,6 +17,8 @@ through a simulated delayed network.
 | `train.py` | trains probe only (`--probe-only`) or predictor + probe with teacher-forcing + 20-step rollout loss |
 | `eval_g1.py` | error vs horizon, learned vs hold / constant-velocity / kinematic, writes the G1 verdict and chart |
 | `probe_check.py` | perception-floor diagnostics (MLP vs spatial probe vs raw pixels) |
+| `ghost.py` | C2 ghost: delay estimate from execution stamps, command timeline, none / kinematic / learned / oracle |
+| `c2.py` | C2 closed-loop experiment, paired seeds, batched learned ghost |
 | `leak_check.py` | re-runs the G1 rollout with corrupted future commands, per delay profile |
 | `smoke.sh` | end-to-end run on tiny data; must print `SMOKE OK` |
 | `fleet.sh` | push code to servers, build the venv, run the self-checks: `./fleet.sh 91 70 55` |
@@ -136,6 +138,39 @@ finer readout (unpooled 16×16 tokens), not more episodes.
 
 `train.py` saves `<out>.resume` every eval and resumes from it. The first main run on .91 was killed at
 step 26k (no traceback, a desktop user had logged in) and was rerun on .55.
+
+## C2: ghost display (closed loop)
+
+`ghost.py` builds what the operator perceives from what it can actually observe: received frames (stamped with
+the robot's capture tick and the command it executed the tick before) and its own sent commands. It estimates the
+age of executed commands from the stamps, rebuilds the robot's command timeline, and shows the scene at
+T = now + estimated delay (the tick the command being sent now starts to act). Kinds: `none` (delayed frame),
+`kinematic` (agent replayed exactly through its PD, block held: a Smith predictor), `learned` (kinematic agent +
+world-model block, used when the agent's predicted path reaches the block), `oracle` (true physics from the full
+state at the frame, on the same estimated timeline). Past 600 ms the rollout is chained: at 1.5 s the block
+error is still 7.0 px vs 26.7 px for hold (`results/main_long`), so no retraining for longer horizons.
+
+Checks: zero delay -> every ghost is the live frame; constant delay -> the estimate is exact and the kinematic agent
+is exact; 300b -> estimated age within 1 tick of the truth, agent 6.5 px vs 69 px from the delayed frame. The
+refactored teleop loop reproduces recorded training episodes bit for bit.
+
+`c2.py`: scripted operator, 30 s episodes, N = 200 paired seeds per cell (same scene, operator parameters and
+delay sequence in every cell; seeds disjoint from the training data). The learned ghost runs all episodes in
+lockstep with one batched encode and one batched rollout per tick.
+
+### C2 gate (frozen before any C2 numbers)
+
+Metric: coverage AUC, the mean PushT coverage over the 30 s episode (held at its final value after success).
+Gap recovered = (AUC_ghost - AUC_none) / (AUC_0ms - AUC_none), per profile. CIs are paired bootstrap, 95%.
+
+C2 **PASSES** if on both 300j and 300b:
+1. the learned ghost helps: AUC_learned - AUC_none > 0, CI excluding 0; and
+2. the world model adds something beyond kinematics: AUC_learned - AUC_kinematic > 0, CI excluding 0.
+
+Reported regardless: gap recovered for every ghost and profile, the oracle as the ceiling, success rate, and the
+closed-loop ghost error (the operator behaves differently with a ghost, so this is not the G1 error). If (1) holds
+and (2) does not, the finding is that a Smith predictor is enough for this task, and the learned model is not
+needed for the display.
 
 ## Running
 

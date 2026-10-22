@@ -57,30 +57,54 @@ class Link:
         return [(sent, p) for _, sent, _, p in sorted(out, key=lambda x: x[1])]
 
 
-def run_episode(env, operator, up, down, max_ticks):
+def run_episode(env, operator, up, down, max_ticks, ghost=None):
+    """Plain call for ghosts that never need the GPU; see `episode` for the loop."""
+    g = episode(env, operator, up, down, max_ticks, ghost)
+    try:
+        next(g)
+    except StopIteration as done:
+        return done.value
+    raise RuntimeError("this ghost needs a batched driver (c2.py)")
+
+
+def episode(env, operator, up, down, max_ticks, ghost=None):
     """Tick t: robot captures frame t -> operator sees the newest frame that has arrived -> operator sends a command ->
-    robot executes the newest command that has arrived (holding the last one otherwise) -> physics advances 30 ms."""
+    robot executes the newest command that has arrived (holding the last one otherwise) -> physics advances 30 ms.
+    Frame t carries the robot's execution stamp for tick t-1 (sent tick and target of the command it ran).
+    With a ghost (ghost.py), the operator acts on the ghost's estimate instead of the shown frame. A ghost that needs
+    the GPU returns a request dict; it is yielded to the batched driver and the answer goes to request["finish"].
+    A generator; its return value is the episode log."""
     s = full_state(env)
     shown_tick, shown = -1, s.copy()  # the session opens with a snapshot of the start scene
     exec_tick, cmd_exec = -1, s[AGENT].copy()  # the robot holds its start position until a command lands
-    log = {k: [] for k in ["state", "contact", "coverage", "sent", "exec", "exec_tick", "shown_tick", "up", "down"]}
+    received, sent = {}, []
+    log = {k: [] for k in ["state", "contact", "coverage", "sent", "exec", "exec_tick", "shown_tick", "up", "down",
+                           "perceived", "ghost_tick"]}
     success = False
     for t in range(max_ticks):
         log["state"].append(s)
         log["contact"].append(in_contact(env))
         log["coverage"].append(env._get_coverage())
-        log["down"].append(down.send(t, s))
+        log["down"].append(down.send(t, (s, exec_tick, cmd_exec)))
         for cap, frame in down.recv(t):
+            received[cap] = frame
             if cap > shown_tick:  # a frame older than the one on screen is never shown
-                shown_tick, shown = cap, frame
-        cmd = operator.act(shown, t)
+                shown_tick, shown = cap, frame[0]
+        seen, seen_tick = shown, shown_tick
+        if ghost is not None:
+            seen, seen_tick = ghost(t, received, shown_tick, shown, sent)
+            if isinstance(seen, dict):
+                seen = seen["finish"]((yield seen))
+        cmd = operator.act(seen, t)
+        sent.append(cmd)
         log["up"].append(up.send(t, cmd))
-        for sent, c in up.recv(t):
-            if sent > exec_tick:  # a command overtaken by a newer one is stale and dropped
-                exec_tick, cmd_exec = sent, c
+        for sent_t, c in up.recv(t):
+            if sent_t > exec_tick:  # a command overtaken by a newer one is stale and dropped
+                exec_tick, cmd_exec = sent_t, c
         _, _, success, _, _ = env.step(cmd_exec)
         s = full_state(env)
-        for k, v in [("sent", cmd), ("exec", cmd_exec), ("exec_tick", exec_tick), ("shown_tick", shown_tick)]:
+        for k, v in [("sent", cmd), ("exec", cmd_exec), ("exec_tick", exec_tick), ("shown_tick", shown_tick),
+                     ("perceived", seen), ("ghost_tick", seen_tick)]:
             log[k].append(v)
         if success:
             break
@@ -95,7 +119,7 @@ def run_episode(env, operator, up, down, max_ticks):
 if __name__ == "__main__":
     from sim import make_env, ScriptedOperator
 
-    def episode(seed, up_delay, down_delay, ticks=300):
+    def ep(seed, up_delay, down_delay, ticks=300):
         env, rng = make_env(seed), np.random.default_rng(seed)
         op = ScriptedOperator(rng, full_state(env)[AGENT])
         return run_episode(env, op, Link(up_delay), Link(down_delay), ticks)
@@ -111,12 +135,12 @@ if __name__ == "__main__":
     assert cmd == "new" and exec_tick == 1
 
     # zero delay is an ordinary closed loop
-    L = episode(0, lambda: 0.0, lambda: 0.0)
+    L = ep(0, lambda: 0.0, lambda: 0.0)
     n = len(L["exec_tick"])
     assert np.array_equal(L["shown_tick"], np.arange(n)) and np.array_equal(L["exec_tick"], np.arange(n))
 
     # constant 150 ms = 5 ticks each way; before anything arrives the start snapshot / start position is held
-    L = episode(1, lambda: 150.0, lambda: 150.0)
+    L = ep(1, lambda: 150.0, lambda: 150.0)
     want = np.arange(len(L["shown_tick"])) - 5
     want[want < 0] = -1
     assert np.array_equal(L["shown_tick"], want) and np.array_equal(L["exec_tick"], want)
@@ -124,7 +148,7 @@ if __name__ == "__main__":
     # bursty jitter: the screen never goes back in time and never shows a frame that has not arrived (no live leak)
     for seed in range(5):
         rng = np.random.default_rng(seed)
-        L = episode(seed, Delay("300b", rng), Delay("300b", rng))
+        L = ep(seed, Delay("300b", rng), Delay("300b", rng))
         t = np.arange(len(L["shown_tick"]))
         for key, lag in [("shown_tick", "down"), ("exec_tick", "up")]:
             k = L[key]

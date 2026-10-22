@@ -46,6 +46,25 @@ def build_meta(data, max_episodes=None):
     return meta
 
 
+def encoder(dev="cuda"):
+    m = AutoModel.from_pretrained("facebook/dinov2-small").to(dev).eval()
+    return m.half() if dev == "cuda" else m
+
+
+@torch.no_grad()
+def encode(model, img, pool=8):
+    """img (B, 224, 224, 3) uint8 renders -> (B, 1 + pool^2, 384) fp16 tokens: CLS + pooled patches."""
+    # no HF image processor: its resize-256 + center-crop-224 would cut off the workspace edges
+    p = next(model.parameters())
+    x = ((img.permute(0, 3, 1, 2).float() / 255 - MEAN) / STD).to(p.device, p.dtype)
+    h = model(pixel_values=x).last_hidden_state  # (B, 1 + 16*16, 384)
+    tok = h[:, :1]
+    if pool:
+        g = h[:, 1:].transpose(1, 2).reshape(len(h), 384, 16, 16)
+        tok = torch.cat([tok, F.adaptive_avg_pool2d(g, pool).flatten(2).transpose(1, 2)], 1)
+    return tok
+
+
 @torch.no_grad()
 def main():
     ap = argparse.ArgumentParser()
@@ -60,19 +79,13 @@ def main():
     n_tok = 1 + args.pool**2
     out = np.lib.format.open_memmap(f"{args.data}/emb_p{args.pool}.npy", "w+", np.float16, (len(meta["states"]), n_tok, 384))
     dev = "cuda"
-    model = AutoModel.from_pretrained("facebook/dinov2-small").to(dev).eval().half()
+    model = encoder(dev)
     loader = torch.utils.data.DataLoader(Frames(meta["states"]), batch_size=args.batch, num_workers=args.workers)
     i = 0
     for b, img in enumerate(loader):
-        # no HF image processor: its resize-256 + center-crop-224 would cut off the workspace edges
-        x = ((img.permute(0, 3, 1, 2).float() / 255 - MEAN) / STD).to(dev).half()
-        h = model(pixel_values=x).last_hidden_state  # (B, 1 + 16*16, 384)
-        tok = h[:, :1]
-        if args.pool:
-            g = h[:, 1:].transpose(1, 2).reshape(len(h), 384, 16, 16)
-            tok = torch.cat([tok, F.adaptive_avg_pool2d(g, args.pool).flatten(2).transpose(1, 2)], 1)
-        out[i:i + len(h)] = tok.cpu().numpy()
-        i += len(h)
+        tok = encode(model, img, args.pool)
+        out[i:i + len(tok)] = tok.cpu().numpy()
+        i += len(tok)
         if b % 200 == 0:
             print(f"{i}/{len(out)} frames", flush=True)
     out.flush()

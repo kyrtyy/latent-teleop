@@ -32,12 +32,17 @@ def in_contact(env):
     return any(agent.shapes_collide(s).points for s in env._block_shapes)
 
 
-def render(env, s):
-    """The frame depends only on agent position and block pose (goal is fixed), so frames are never stored."""
+def set_state(env, s):
     env.block.angle = float(s[ANGLE])  # angle first: pymunk rotates about the CoG, which would move the origin
     env.agent.position, env.block.position = s[AGENT].tolist(), s[BLOCK].tolist()
+    env.agent.velocity, env.block.velocity, env.block.angular_velocity = s[AGENT_V].tolist(), s[7:9].tolist(), float(s[9])
     env.space.reindex_shapes_for_body(env.agent)
     env.space.reindex_shapes_for_body(env.block)
+
+
+def render(env, s):
+    """The frame depends only on agent position and block pose (goal is fixed), so frames are never stored."""
+    set_state(env, s)
     return env._render()  # visualize=False: no action marker drawn
 
 
