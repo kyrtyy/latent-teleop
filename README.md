@@ -20,6 +20,7 @@ through a simulated delayed network.
 | `ghost.py` | C2 ghost: delay estimate from execution stamps, command timeline, none / kinematic / learned / oracle |
 | `c2.py` | C2 closed-loop experiment, paired seeds, batched learned ghost |
 | `c2_gate.py` | C2 gate: gap recovered, paired-bootstrap CIs, verdict |
+| `c4.py` | C4: fault injection, segment scores, conformal flags |
 | `leak_check.py` | re-runs the G1 rollout with corrupted future commands, per delay profile |
 | `smoke.sh` | end-to-end run on tiny data; must print `SMOKE OK` |
 | `fleet.sh` | push code to servers, build the venv, run the self-checks: `./fleet.sh 91 70 55` |
@@ -198,6 +199,47 @@ The learned ghost queries the model about 540 times per 30 s episode and falls b
 (300b) times per episode. The delay cap never triggers.
 At 50 ms there is too little delay for the model to beat kinematics; the CI includes 0. 300 ms cells ran with
 rollout chunk 16, because 64 ran out of memory on a 6 GB GPU.
+
+## C4 + RQ4: self-auditing demonstrations
+
+`c4.py` injects labelled faults into scripted-operator demonstrations (natural hesitations off, so clean episodes
+are clean): `hesitate` (cursor frozen 20-40 ticks), `wrong` (a 15-30 tick push toward a random point), `spike`
+(+700 ms on both links for 25 ticks), `slip` (the block jumps 15-30 px / 0.15-0.3 rad). Segments are 15 ticks.
+
+Pilot (`data_c4pilot`, 180 episodes, used only to choose the score; never reused). Segment AUROC vs clean episodes:
+
+| fault | dyn | stale | blind |
+|---|---|---|---|
+| hesitate | 0.39 | 0.40 | 0.45 |
+| wrong | 0.73 | 0.64 | 0.66 |
+| spike | 0.47 | 0.59 | 0.58 |
+| slip | 0.81 | 0.68 | 0.76 |
+
+A world model fed the executed commands cannot see faults that live in the action rather than the scene: during a
+hesitation or a spike the robot holds its last command and the scene goes quiet, so prediction error drops.
+It does see physics surprises (slip) and, partly, mistaken pushes. That is a finding, not a bug to tune away.
+
+### RQ4 gate (frozen before any RQ4 data)
+
+Data: fresh seeds. Demos: 100 episodes per delay profile (600), 1000 ticks, 30% of them with one injected fault
+(equal split over the four kinds). Conformal calibration: 20 clean episodes per profile; a further 20 per profile
+held out to check the false-alarm rate. Score: `dyn` (latent k-step error, K = 10, under executed commands), each
+anchor credited to every tick of its window. Split conformal per delay profile (the profile is observable from the
+frame stamps), alpha = 0.05; a segment above its profile's threshold is flagged.
+
+Policy: state-based diffusion policy (2 observation ticks of agent xy, block xy, block angle sin/cos; a 16-tick chunk
+of executed commands, 8 executed), trained on robot-side (state, executed command) pairs. 3 training seeds per arm.
+Evaluated autonomously (no network delay) on 200 paired held-out scenes, 1000 ticks; metric coverage AUC.
+
+Arms: `full`; `wm` (drop flagged segments) - primary; `random` (drop the same number of segments, as contiguous
+15-tick blocks); `oracle` (drop the true fault windows) - diagnostic; `rules` (flag segments whose command age or
+command stall exceed conformal thresholds from the same calibration set) - declared secondary.
+
+RQ4 **PASSES** if AUC(wm) - AUC(random) > 0 with a paired-bootstrap 95% CI excluding 0, and AUC(wm) is no more than
+0.01 below AUC(full) (fewer demos, no worse policy). Reported regardless: oracle and rules arms, per-fault oracle
+arms, flag precision/recall and event recall per fault kind, per-profile AUROC, and the empirical false-alarm rate on
+the held-out clean set next to alpha. If `oracle` does not beat `random`, these faults do not hurt this policy and
+RQ4 is null for any detector.
 
 ## Running
 
