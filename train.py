@@ -23,9 +23,10 @@ ap.add_argument("--K", type=int, default=20, help="rollout ticks (20 x 30 ms = 6
 ap.add_argument("--rollout-weight", type=float, default=1.0, help="0 = teacher forcing only (ablation)")
 ap.add_argument("--eval-every", type=int, default=1000)
 ap.add_argument("--out", default=None)
+ap.add_argument("--seed", type=int, default=0)
 args = ap.parse_args()
-torch.manual_seed(0)
-rng = np.random.default_rng(0)
+torch.manual_seed(args.seed)
+rng = np.random.default_rng(args.seed)
 dev = "cuda"
 
 meta = np.load(f"{args.data}/meta.npz")
