@@ -9,8 +9,8 @@ Natural hesitations are switched off (op hesitate = 0), so clean episodes are cl
 
 Segment scores (SEG ticks each), from frozen DINOv2 tokens and the C1 world model:
   dyn    k-step latent prediction error from the true context under the executed commands (physics surprise)
-  stale  latent distance between the frame the operator acted on and the scene when its command ran
-  blind  world-model error predicting that scene from the operator's frame under the executed commands
+  age, stall  log rules (declared secondary): oldest command run in the segment, longest hold of one command
+The pilot also tried `stale` and `blind` (operator-view scores; README); they never beat dyn and were removed.
 """
 import argparse
 import os
@@ -94,19 +94,19 @@ def episode(seed, profile, kind, max_ticks=600):
 
 
 def _one(job):
-    out, idx, seed, profile, kind = job
-    log = episode(seed, profile, kind)
+    out, idx, seed, profile, kind, max_ticks = job
+    log = episode(seed, profile, kind, max_ticks)
     np.savez_compressed(f"{out}/ep_{idx:05d}.npz", **log)
     return kind, bool(log["success"])
 
 
-def collect(out, n_clean, n_fault, seed, workers=20):
+def collect(out, n_clean, n_fault, seed, max_ticks=600, workers=20):
     """Per profile: n_clean clean episodes, then n_fault of each fault kind; seeds disjoint from G1 (0..) and C2 (7*1e6+3)."""
     os.makedirs(out, exist_ok=True)
     jobs, i = [], 0
     for kind in [None] * n_clean + [k for k in KINDS for _ in range(n_fault)]:
         for p in PROFILES:
-            jobs.append((out, i, seed * 1_000_003 + i, p, kind))
+            jobs.append((out, i, seed * 1_000_003 + i, p, kind, max_ticks))
             i += 1
     with Pool(workers) as pool:
         res = pool.map(_one, jobs, chunksize=2)
@@ -123,8 +123,11 @@ def auroc(pos, neg):
     return (r[:len(pos)].sum() - len(pos) * (len(pos) - 1) / 2) / (len(pos) * len(neg))
 
 
-def score(data, ckpt, K=10, stride=3, max_blind=60):
-    """-> per-segment table: episode, segment start, fault kind or 'clean', is-faulty, dyn, stale, blind."""
+def score(data, ckpt, K=10, stride=3):
+    """-> per-segment table: episode, segment index, profile, fault kind or 'clean', is-faulty, dyn, age, stall.
+    dyn: world-model k-step latent error under the executed commands; each anchor's error is credited to every tick
+    of its predicted window, and a segment takes the max. age, stall (log rules, no model): the oldest command the
+    robot ran in the segment (ticks), and the longest run of ticks it held one command."""
     import torch
     from world_model import Predictor, amp, norm, norm_xy, rollout
 
@@ -139,55 +142,92 @@ def score(data, ckpt, K=10, stride=3, max_blind=60):
     rows = []
     for e, f in enumerate(meta["files"]):
         L = np.load(f)
-        z = torch.from_numpy(np.asarray(emb[off[e]:off[e + 1]])).to(dev)
-        zn = norm(z)
+        zn = norm(torch.from_numpy(np.array(emb[off[e]:off[e + 1]])).to(dev))
         u = torch.from_numpy(norm_xy(act[off[e]:off[e + 1]]).astype(np.float32)).to(dev)
-        n = len(zn)
-        dyn, stale, blind = (np.full(n, np.nan) for _ in range(3))
-        with torch.no_grad():
-            a = np.arange(H - 1, n - K, stride)
-            ctx = zn[torch.from_numpy(a[:, None] + np.arange(-H + 1, 1))]
-            with amp():
-                pred = rollout(model, ctx, u[torch.from_numpy(a[:, None] + np.arange(-H + 1, K))], K).float()
-            err = (pred - zn[torch.from_numpy(a[:, None] + np.arange(1, K + 1))]).abs().mean((-1, -2)).mean(1)
-            dyn[a + K // 2] = err.cpu().numpy()
-            # tick t ran the command sent at e_t, which the operator chose looking at frame c = shown_tick[e_t]
-            ex, sh = L["exec_tick"], L["shown_tick"]
-            t = np.arange(len(ex))
-            ok = ex >= 0
-            c = np.full(len(ex), -1)
-            c[ok] = sh[ex[ok]]
-            ok &= c >= H - 1
-            stale[t[ok]] = (zn[t[ok]] - zn[c[ok]]).abs().mean((-1, -2)).cpu().numpy()
-            k = t - c
-            for kk in np.unique(k[ok & (k >= 1) & (k <= max_blind)]):
-                tt = t[ok & (k == kk)][::stride]
-                cc = tt - kk
-                ctx = zn[torch.from_numpy(cc[:, None] + np.arange(-H + 1, 1))]
-                with amp():
-                    pred = rollout(model, ctx, u[torch.from_numpy(cc[:, None] + np.arange(-H + 1, kk))], int(kk)).float()
-                blind[tt] = (pred[:, -1] - zn[torch.from_numpy(tt)]).abs().mean((-1, -2)).cpu().numpy()
-            blind[t[ok & (k == 0)]] = 0.0
+        T = len(L["exec"])
+        dyn = np.full(T + 1, -np.inf)
+        a = np.arange(H - 1, T + 1 - K, stride)
+        if len(a):
+            with torch.no_grad(), amp():
+                pred = rollout(model, zn[torch.from_numpy(a[:, None] + np.arange(-H + 1, 1))],
+                               u[torch.from_numpy(a[:, None] + np.arange(-H + 1, K))], K).float()
+            err = (pred - zn[torch.from_numpy(a[:, None] + np.arange(1, K + 1))]).abs().mean((-1, -2)).mean(1).cpu().numpy()
+            np.maximum.at(dyn, a[:, None] + np.arange(1, K + 1), np.repeat(err[:, None], K, 1))
+        dyn = dyn[1:]  # tick t's command produced frame t+1
+        ex = L["exec_tick"]
+        age = np.where(ex >= 0, np.arange(T) - ex, np.arange(T) + 1).astype(float)
+        same = np.r_[False, np.all(np.diff(L["exec"], axis=0) == 0, 1)]
+        run = np.zeros(T)
+        for t in range(1, T):
+            run[t] = run[t - 1] + 1 if same[t] else 0
         kind, f0, f1 = str(L["fault"]), int(L["fault_t0"]), int(L["fault_t1"])
-        for s0 in range(0, n - SEG + 1, SEG):
-            seg = slice(s0, s0 + SEG)
-            bad = kind != "clean" and s0 < f1 and s0 + SEG > f0
-            rows.append((e, s0, kind, bad, *(np.nanmax(x[seg]) if np.isfinite(x[seg]).any() else np.nan
-                                              for x in (dyn, stale, blind))))
+        for i in range((T + SEG - 1) // SEG):
+            seg = slice(i * SEG, (i + 1) * SEG)
+            bad = kind != "clean" and i * SEG < f1 and (i + 1) * SEG > f0
+            d = dyn[seg]
+            rows.append((e, i, str(L["profile"]), kind, bad, d.max() if np.isfinite(d).any() else np.nan,
+                         age[seg].max(), run[seg].max()))
     return rows
+
+
+def table(rows):
+    return {k: np.array([r[j] for r in rows]) for j, k in enumerate(["ep", "seg", "profile", "kind", "bad", "dyn", "age", "stall"])}
+
+
+def thresholds(cal, key, alpha):
+    """Split conformal per delay profile: the ceil((n+1)(1-alpha))-th smallest clean calibration score."""
+    out = {}
+    for p in np.unique(cal["profile"]):
+        x = np.sort(cal[key][(cal["profile"] == p) & ~np.isnan(cal[key])])
+        out[p] = x[min(len(x) - 1, int(np.ceil((len(x) + 1) * (1 - alpha))) - 1)]
+    return out
+
+
+def flag(t, thr, key):
+    return np.array([v > thr[p] for v, p in zip(t[key], t["profile"])])
+
+
+def flags(data, cal_data, hold_data, ckpt, alpha=0.05):
+    cal, hold, rq = (table(score(d, ckpt)) for d in (cal_data, hold_data, data))
+    np.savez(f"{data}/scores.npz", **rq)
+    th = {k: thresholds(cal, k, alpha if k == "dyn" else alpha / 2) for k in ("dyn", "age", "stall")}
+    out = {"wm": flag(rq, th["dyn"], "dyn"), "rules": flag(rq, th["age"], "age") | flag(rq, th["stall"], "stall")}
+    per_ep = {a: [m[rq["ep"] == e] for e in range(rq["ep"].max() + 1)] for a, m in out.items()}
+    np.savez(f"{data}/flags.npz", **{a: np.array(v, dtype=object) for a, v in per_ep.items()})
+    print(f"alpha {alpha}: false-alarm rate on held-out clean segments: wm "
+          f"{flag(hold, th['dyn'], 'dyn').mean():.3f}, rules {(flag(hold, th['age'], 'age') | flag(hold, th['stall'], 'stall')).mean():.3f}")
+    clean = rq["kind"] == "clean"
+    print(f"{'kind':>9} {'segs':>5} | AUROC within profile: {'dyn':>6} {'age':>6} {'stall':>6} | "
+          f"wm recall / event recall | rules recall / event recall")
+    for k in KINDS:
+        pos = (rq["kind"] == k) & rq["bad"]
+        au = []
+        for key in ("dyn", "age", "stall"):
+            v = [auroc(rq[key][pos & (rq["profile"] == p)], rq[key][clean & (rq["profile"] == p)])
+                 for p in np.unique(rq["profile"])]
+            au.append(np.nanmean(v))
+        ev = {a: np.mean([m[pos & (rq["ep"] == e)].any() for e in np.unique(rq["ep"][pos])]) for a, m in out.items()}
+        print(f"{k:>9} {pos.sum():5d} | {'':>21} {au[0]:6.3f} {au[1]:6.3f} {au[2]:6.3f} | "
+              f"{out['wm'][pos].mean():.2f} / {ev['wm']:.2f}             | {out['rules'][pos].mean():.2f} / {ev['rules']:.2f}")
+    for a, m in out.items():
+        print(f"{a}: flags {m.sum()} segments ({m.mean():.1%}); precision vs injected faults {rq['bad'][m].mean():.2f}; "
+              f"fault segments flagged {m[rq['bad']].mean():.2f}; clean-episode segments flagged {m[clean].mean():.3f}")
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["check", "collect", "score"])
+    ap.add_argument("cmd", choices=["check", "collect", "flags"])
     ap.add_argument("--data", default="data_c4pilot")
     ap.add_argument("--n-clean", type=int, default=10)
     ap.add_argument("--n-fault", type=int, default=5)
     ap.add_argument("--seed", type=int, default=13)
     ap.add_argument("--ckpt", default="data/wm_main.pt")
+    ap.add_argument("--max-ticks", type=int, default=600)
     args = ap.parse_args()
     if args.cmd == "check":
         assert abs(auroc(np.array([2.0, 3]), np.array([0.0, 1])) - 1) < 1e-9 and abs(auroc(np.ones(3), np.ones(4)) - 0.5) < 1e-9
+        cal = {"profile": np.array(["a"] * 100), "x": np.arange(100.0)}
+        assert thresholds(cal, "x", 0.05)["a"] == 95  # ceil(101 * 0.95) = 96th smallest
         base = episode(5, "50j", None)
         for kind in KINDS:
             L = episode(5, "50j", kind)
@@ -202,17 +242,6 @@ if __name__ == "__main__":
                 assert jump > 10, jump
         print("c4.py checks passed")
     elif args.cmd == "collect":
-        collect(f"{args.data}/episodes", args.n_clean, args.n_fault, args.seed)
+        collect(f"{args.data}/episodes", args.n_clean, args.n_fault, args.seed, args.max_ticks)
     else:
-        rows = score(args.data, args.ckpt)
-        kinds = np.array([r[2] for r in rows])
-        bad = np.array([r[3] for r in rows])
-        S = np.array([r[4:] for r in rows], float)
-        np.savez(f"{args.data}/scores.npz", ep=[r[0] for r in rows], s0=[r[1] for r in rows], kind=kinds, bad=bad, S=S)
-        neg = kinds == "clean"
-        print(f"{len(rows)} segments; AUROC of each score, faulty segments of a kind vs clean-episode segments")
-        print(f"{'kind':>9} {'n':>5} " + " ".join(f"{s:>7}" for s in ["dyn", "stale", "blind"]))
-        for k in KINDS:
-            pos = (kinds == k) & bad
-            print(f"{k:>9} {pos.sum():5d} " + " ".join(
-                f"{auroc(S[pos, j][~np.isnan(S[pos, j])], S[neg, j][~np.isnan(S[neg, j])]):7.3f}" for j in range(3)))
+        flags(args.data, args.data + "cal", args.data + "hold", args.ckpt)

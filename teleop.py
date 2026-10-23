@@ -57,9 +57,9 @@ class Link:
         return [(sent, p) for _, sent, _, p in sorted(out, key=lambda x: x[1])]
 
 
-def run_episode(env, operator, up, down, max_ticks, ghost=None):
+def run_episode(env, operator, up, down, max_ticks, ghost=None, executor=None):
     """Plain call for ghosts that never need the GPU; see `episode` for the loop."""
-    g = episode(env, operator, up, down, max_ticks, ghost)
+    g = episode(env, operator, up, down, max_ticks, ghost, executor)
     try:
         next(g)
     except StopIteration as done:
@@ -67,12 +67,13 @@ def run_episode(env, operator, up, down, max_ticks, ghost=None):
     raise RuntimeError("this ghost needs a batched driver (c2.py)")
 
 
-def episode(env, operator, up, down, max_ticks, ghost=None):
+def episode(env, operator, up, down, max_ticks, ghost=None, executor=None):
     """Tick t: robot captures frame t -> operator sees the newest frame that has arrived -> operator sends a command ->
     robot executes the newest command that has arrived (holding the last one otherwise) -> physics advances 30 ms.
     Frame t carries the robot's execution stamp for tick t-1 (sent tick and target of the command it ran).
     With a ghost (ghost.py), the operator acts on the ghost's estimate instead of the shown frame. A ghost that needs
     the GPU returns a request dict; it is yielded to the batched driver and the answer goes to request["finish"].
+    An executor (c3.py) replaces the robot's "run the newest command" rule: executor(t, arrived) -> (tick, command).
     A generator; its return value is the episode log."""
     s = full_state(env)
     shown_tick, shown = -1, s.copy()  # the session opens with a snapshot of the start scene
@@ -98,9 +99,13 @@ def episode(env, operator, up, down, max_ticks, ghost=None):
         cmd = operator.act(seen, t)
         sent.append(cmd)
         log["up"].append(up.send(t, cmd))
-        for sent_t, c in up.recv(t):
-            if sent_t > exec_tick:  # a command overtaken by a newer one is stale and dropped
-                exec_tick, cmd_exec = sent_t, c
+        arrived = up.recv(t)
+        if executor is not None:
+            exec_tick, cmd_exec = executor(t, arrived)
+        else:
+            for sent_t, c in arrived:
+                if sent_t > exec_tick:  # a command overtaken by a newer one is stale and dropped
+                    exec_tick, cmd_exec = sent_t, c
         _, _, success, _, _ = env.step(cmd_exec)
         s = full_state(env)
         for k, v in [("sent", cmd), ("exec", cmd_exec), ("exec_tick", exec_tick), ("shown_tick", shown_tick),
