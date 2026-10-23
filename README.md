@@ -19,6 +19,7 @@ through a simulated delayed network.
 | `probe_check.py` | perception-floor diagnostics (MLP vs spatial probe vs raw pixels) |
 | `ghost.py` | C2 ghost: delay estimate from execution stamps, command timeline, none / kinematic / learned / oracle |
 | `c2.py` | C2 closed-loop experiment, paired seeds, batched learned ghost |
+| `c2_gate.py` | C2 gate: gap recovered, paired-bootstrap CIs, verdict |
 | `leak_check.py` | re-runs the G1 rollout with corrupted future commands, per delay profile |
 | `smoke.sh` | end-to-end run on tiny data; must print `SMOKE OK` |
 | `fleet.sh` | push code to servers, build the venv, run the self-checks: `./fleet.sh 91 70 55` |
@@ -171,6 +172,32 @@ Reported regardless: gap recovered for every ghost and profile, the oracle as th
 closed-loop ghost error (the operator behaves differently with a ghost, so this is not the G1 error). If (1) holds
 and (2) does not, the finding is that a Smith predictor is enough for this task, and the learned model is not
 needed for the display.
+
+### C2 results (2026-10-23): **PASS**
+
+`python c2_gate.py` on `results/c2` (N = 200 paired episodes per cell, model `data/wm_main.pt` retrained on .91,
+probe `data_big/probe150k_p8.pt`). Coverage AUC, with gap recovered in parentheses. The 0 ms reference is 0.516
+(success 0.24).
+
+| Profile | none | kinematic | learned | oracle | learned − kinematic [95% CI] |
+|---|---|---|---|---|---|
+| 50j | 0.457 | 0.490 (56%) | 0.498 (70%) | 0.517 (103%) | +0.008 [−0.008, +0.024] |
+| 150j | 0.375 | 0.451 (54%) | 0.514 (99%) | 0.521 (104%) | +0.063 [+0.046, +0.078] |
+| 150b | 0.363 | 0.438 (49%) | 0.504 (93%) | 0.516 (100%) | +0.066 [+0.052, +0.081] |
+| **300j** | 0.298 | 0.426 (59%) | **0.494 (90%)** | 0.516 (100%) | **+0.068 [+0.051, +0.084]** |
+| **300b** | 0.287 | 0.419 (58%) | **0.483 (86%)** | 0.507 (96%) | **+0.064 [+0.048, +0.080]** |
+
+At 300j and 300b, learned − none is +0.196 (CI [+0.18, +0.21]), and both gate conditions hold.
+
+| 300 ms (j / b) | none | kinematic | learned | oracle |
+|---|---|---|---|---|
+| success rate | 0.04 / 0.03 | 0.14 / 0.12 | 0.20 / 0.22 | 0.33 / 0.31 |
+| closed-loop ghost block error while moving (px) | 22.0 / 22.3 | 24.2 / 24.0 | 7.7 / 8.8 | 3.7 / 4.8 |
+
+The learned ghost queries the model about 540 times per 30 s episode and falls back to hold 0.9 (300j) and 11.3
+(300b) times per episode. The delay cap never triggers.
+At 50 ms there is too little delay for the model to beat kinematics; the CI includes 0. 300 ms cells ran with
+rollout chunk 16, because 64 ran out of memory on a 6 GB GPU.
 
 ## Running
 

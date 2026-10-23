@@ -44,7 +44,7 @@ def cpu_one(job):
     return summarize(run_episode(env, op, up, down, max_ticks, g), g, max_ticks)
 
 
-def learned_cell(seeds, profile, max_ticks, ckpt, probe_ckpt, chunk=64):
+def learned_cell(seeds, profile, max_ticks, ckpt, probe_ckpt, chunk=16):  # 64 OOMs a 6 GB GPU at 300 ms
     import torch
     from embed import encode, encoder
     from sim import render
