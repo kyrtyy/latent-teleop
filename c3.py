@@ -59,14 +59,13 @@ class ChunkExecutor:
             w = (j + 1) / (BLEND + 1)
             cmd = w * cmd + (1 - w) * self.old[j]
         stop = j >= 1 and self.safety is not None and self.safety(self, t, self.path[np.minimum(np.arange(j, j + K_SAFE), N - 1)])
-        if not stop:
-            self.cmd = cmd
+        self.cmd = self.states[t][AGENT].copy() if stop else cmd  # stop = target where the agent is now
         self.j.append(j), self.stopped.append(stop), self.hist.append(self.cmd.copy())
         return self.e, self.cmd.copy()
 
 
 def moves(b_path, b_hold, th_path, th_hold):
-    """Would following the path move the block more than stopping (3 px or 0.05 rad)?"""
+    """Would following the path move the block more than stopping where the agent is (3 px or 0.05 rad)?"""
     return bool(np.linalg.norm(b_path - b_hold) > 3 or abs(th_path - th_hold) > 0.05)
 
 
@@ -78,7 +77,7 @@ class OracleSafety:
 
     def __call__(self, ex, t, path):
         end = []
-        for p in (path, np.repeat(ex.cmd[None], len(path), 0)):  # the remaining path vs holding where it is
+        for p in (path, np.repeat(ex.states[t][None, AGENT], len(path), 0)):  # the remaining path vs stopping here
             set_state(self.sim, ex.states[t])
             for c in p:
                 self.sim.step(c)
@@ -108,7 +107,7 @@ class WMSafety:
             self.tok.update(zip(new, encode(self.enc, img)))
         z = norm(torch.stack([self.tok[c] for c in ctx]))[None].repeat(2, 1, 1, 1)
         past = [ex.hist[c] for c in ctx[:-1]]
-        a = np.stack([np.concatenate([past, p]) for p in (path, np.repeat(ex.cmd[None], len(path), 0))])
+        a = np.stack([np.concatenate([past, p]) for p in (path, np.repeat(ex.states[t][None, AGENT], len(path), 0))])
         with torch.no_grad():  # differential: the probe's own bias cancels between the two rollouts
             pred = rollout(self.model, z, torch.from_numpy(norm_xy(a).astype(np.float32)), len(path))
             _, b, th, _ = decode(self.probe(pred[:, -1]))

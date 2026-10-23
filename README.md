@@ -226,6 +226,23 @@ Secondary, reported regardless: jerk, success, `chunk` vs `blend`, and, for the 
 motion (block px moved while the robot ran without a fresh command), stops per minute and their coverage cost.
 Also: how well `wm` agrees with `oracle`.
 
+### C3 results (2026-10-24): primary gate **PASS**
+
+`python gates.py c3`. Pauses per minute and coverage AUC, setpoint loop -> path executor with blending; N = 200 paired.
+
+| Profile | pauses/min | blend - setpoint [95% CI] | coverage AUC | AUC diff [95% CI] | success |
+|---|---|---|---|---|---|
+| 50j | 0.4 -> 0.0 | [-0.6, -0.3] | 0.445 -> 0.457 | [+0.001, +0.023] | 0.10 -> 0.14 |
+| 150j | 86.5 -> 1.8 | [-86.1, -83.1] | 0.370 -> 0.379 | [+0.000, +0.019] | 0.07 -> 0.07 |
+| 150b | 95.6 -> 1.9 | [-95.3, -92.1] | 0.360 -> 0.374 | [+0.006, +0.023] | 0.09 -> 0.09 |
+| **300j** | 161.2 -> 2.1 | [-160.8, -157.5] | 0.299 -> 0.305 | [-0.002, +0.016] | 0.04 -> 0.05 |
+| **300b** | 165.8 -> 3.2 | [-164.3, -160.9] | 0.295 -> 0.299 | [-0.004, +0.013] | 0.04 -> 0.07 |
+
+The robot stops freezing between late packets (98% fewer pauses) without losing task performance. Coverage is
+slightly better, and the gain is significant at 50j, 150j and 150b. Jerk is unchanged (0.28 vs 0.28 at 300 ms).
+Blending beats a hard switch by a small margin at every profile. Execution smoothness does not close the latency gap:
+coverage stays at the no-ghost level (C2's 0.29-0.30), because the operator still acts on a stale view.
+
 ## C4 + RQ4: self-auditing demonstrations
 
 `c4.py` injects labelled faults into scripted-operator demonstrations (natural hesitations off, so clean episodes
@@ -244,6 +261,23 @@ Pilot (`data_c4pilot`, 180 episodes, used only to choose the score; never reused
 A world model fed the executed commands cannot see faults that live in the action rather than the scene: during a
 hesitation or a spike the robot holds its last command and the scene goes quiet, so prediction error drops.
 It does see physics surprises (slip) and, partly, mistaken pushes. That is a finding, not a bug to tune away.
+
+### C4 detection on the RQ4 data (fresh seeds, alpha = 0.05)
+
+The false-alarm rate on held-out clean segments is 0.043 for `wm` (target 0.05) and 0.016 for `rules`.
+AUROC is computed within each delay profile and then averaged. Recall is reported per segment and per event (at
+least one flag inside the fault window).
+
+| fault | dyn AUROC | age | stall | wm recall / event | rules recall / event |
+|---|---|---|---|---|---|
+| hesitate | 0.49 | 0.53 | 0.89 | 0.07 / 0.17 | 0.74 / 1.00 |
+| wrong | 0.71 | 0.47 | 0.62 | 0.36 / 0.54 | 0.23 / 0.50 |
+| spike | 0.50 | 0.75 | 0.72 | 0.04 / 0.13 | 0.48 / 1.00 |
+| slip | 0.91 | 0.45 | 0.45 | 0.76 / 0.92 | 0.01 / 0.02 |
+
+`wm` flags 5.4% of segments with precision 0.07: the faults are only 1.7% of segments, so most of its alpha budget
+lands on clean data. The world-model score catches the physics faults (slip 92% of events) and the log rules catch
+the action faults (hesitation and spike 100% of events). The two signals cover different faults.
 
 ### RQ4 gate (frozen before any RQ4 data)
 
