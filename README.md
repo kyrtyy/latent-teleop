@@ -20,7 +20,9 @@ through a simulated delayed network.
 | `ghost.py` | C2 ghost: delay estimate from execution stamps, command timeline, none / kinematic / learned / oracle |
 | `c2.py` | C2 closed-loop experiment, paired seeds, batched learned ghost |
 | `c2_gate.py` | C2 gate: gap recovered, paired-bootstrap CIs, verdict |
+| `c3.py` | C3: path operator, chunk executor with blending, world-model / oracle safety layer |
 | `c4.py` | C4: fault injection, segment scores, conformal flags |
+| `policy.py` | RQ4: state-based diffusion policy, curation arms, autonomous evaluation |
 | `leak_check.py` | re-runs the G1 rollout with corrupted future commands, per delay profile |
 | `smoke.sh` | end-to-end run on tiny data; must print `SMOKE OK` |
 | `fleet.sh` | push code to servers, build the venv, run the self-checks: `./fleet.sh 91 70 55` |
@@ -199,6 +201,30 @@ The learned ghost queries the model about 540 times per 30 s episode and falls b
 (300b) times per episode. The delay cap never triggers.
 At 50 ms there is too little delay for the model to beat kinematics; the CI includes 0. 300 ms cells ran with
 rollout chunk 16, because 64 ran out of memory on a 6 GB GPU.
+
+## C3: intent-preserving execution
+
+`c3.py`: every tick the operator sends its intended path, the next 10 targets it would send if the scene stayed as
+it now looks, instead of one setpoint. The robot keeps running the newest path while packets are late, and after a
+gap it blends into the new path over 5 ticks (real-time-chunking style). An optional safety layer runs only while
+the robot is extrapolating on its own. It stops if following the rest of the path would move the block more than
+holding still would (3 px or 0.05 rad over 10 ticks). `wm` judges this with the C1 world model on the robot's own
+live frames, differentially, so the probe's bias cancels; `oracle` uses true physics. The robot never picks a goal.
+Checks: with no delay the path executor reproduces the setpoint loop exactly. On 300b it pauses 5 times per minute
+against 164 for the setpoint loop.
+
+### C3 gate (frozen before any C3 numbers)
+
+Cells: scripted operator (natural hesitations off), 1000 ticks, N = 200 paired seeds (37*1000003 + i), profiles
+50j-300b. Arms `setpoint`, `chunk` (hard switch), `blend`. The safety arms `wm` and `oracle` run on 300j and 300b
+with N = 100, because the CPU world model costs about 0.45 s per tick. A pause is the robot's setpoint frozen for 3
+or more ticks.
+
+C3 **PASSES** if on both 300j and 300b, `blend` has fewer pauses per minute than `setpoint` (paired-bootstrap 95% CI
+excluding 0), and its coverage AUC is not worse by more than 0.01 (lower CI bound of blend - setpoint > -0.01).
+Secondary, reported regardless: jerk, success, `chunk` vs `blend`, and, for the safety arms, robot-initiated block
+motion (block px moved while the robot ran without a fresh command), stops per minute and their coverage cost.
+Also: how well `wm` agrees with `oracle`.
 
 ## C4 + RQ4: self-auditing demonstrations
 
