@@ -44,7 +44,7 @@ def cpu_one(job):
     return summarize(run_episode(env, op, up, down, max_ticks, g), g, max_ticks)
 
 
-def learned_cell(seeds, profile, max_ticks, ckpt, probe_ckpt, chunk=16):  # 64 OOMs a 6 GB GPU at 300 ms
+def learned_cell(seeds, profile, max_ticks, ckpt, probe_ckpt, chunk=16, raw=False):  # 64 OOMs a 6 GB GPU at 300 ms
     import torch
     from embed import encode, encoder
     from sim import render
@@ -105,7 +105,7 @@ def learned_cell(seeds, profile, max_ticks, ckpt, probe_ckpt, chunk=16):  # 64 O
             step += 1
             if step % 200 == 0:
                 print(f"  {profile} learned: {step} batched steps, {len(reqs)} waiting, {time.time() - t0:.0f}s", flush=True)
-    return [summarize(L, e[4], max_ticks) for L, e in zip(logs, eps)]
+    return logs if raw else [summarize(L, e[4], max_ticks) for L, e in zip(logs, eps)]
 
 
 if __name__ == "__main__":

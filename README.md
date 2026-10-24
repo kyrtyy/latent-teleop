@@ -1,9 +1,22 @@
 # aktoria_teleop
 
-Latency-robust teleoperation with a latent world model. This repo currently covers **milestone G1**: can an
-action-conditioned predictor on frozen DINOv2 features predict a contact-rich scene far enough ahead to be worth
-showing an operator? Task: PushT (gym-pusht, pymunk physics) at 30 ms ticks, driven by a scripted operator
-through a simulated delayed network.
+Latency-robust teleoperation with a latent world model. Under network delay the operator sees an old frame; a world
+model trained on frozen DINOv2 features predicts what the robot's scene looks like *now*, and shows the operator that
+"ghost" instead. Task: PushT (gym-pusht, pymunk physics) at 30 ms ticks, driven by a scripted operator through a
+simulated delayed network. Results: G1 (prediction), C2 (ghost display) and C3 (intent-preserving execution) pass
+their pre-registered gates; RQ4 (curating demonstrations with the world model) is null.
+
+## Demo (300 ms jittery delay, real time)
+
+What the operator receives, what the learned ghost predicts, and what is really there at that moment:
+
+![ghost](assets/ghost.gif)
+
+The same scene, operator and network delays, without and with the ghost:
+
+![compare](assets/compare.gif)
+
+`python demo.py` regenerates both (one scene, 300j; the world model runs on CPU in about a minute).
 
 ## Files
 
@@ -23,6 +36,7 @@ through a simulated delayed network.
 | `c3.py` | C3: path operator, chunk executor with blending, world-model / oracle safety layer |
 | `c4.py` | C4: fault injection, segment scores, conformal flags |
 | `policy.py` | RQ4: state-based diffusion policy, curation arms, autonomous evaluation |
+| `demo.py` | the README GIFs |
 | `leak_check.py` | re-runs the G1 rollout with corrupted future commands, per delay profile |
 | `smoke.sh` | end-to-end run on tiny data; must print `SMOKE OK` |
 | `fleet.sh` | push code to servers, build the venv, run the self-checks: `./fleet.sh 91 70 55` |
