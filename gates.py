@@ -38,7 +38,7 @@ def rq4(d="results/rq4"):
     arms = sorted({os.path.basename(f).rsplit("_s", 1)[0] for f in glob.glob(f"{d}/*_s*.npz")})
     auc = {}
     for a in arms:  # per eval episode, averaged over training seeds
-        runs = [np.load(f) for f in sorted(glob.glob(f"{d}/{a}_s*.npz"))]
+        runs = [np.load(f) for f in sorted(glob.glob(f"{d}/{a}_s*.npz")) if os.path.basename(f).rsplit("_s", 1)[0] == a]
         auc[a] = np.mean([r["coverage"].mean(1) for r in runs], 0)
         print(f"{a:>16}: {len(runs)} seeds, AUC {auc[a].mean():.4f} (seed means {[round(r['coverage'].mean(), 4) for r in runs]}) "
               f"success {np.mean([r['success'].mean() for r in runs]):.3f}  dropped {int(runs[0]['dropped'])}/{int(runs[0]['segments'])}")

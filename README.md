@@ -346,7 +346,27 @@ underpowered, not as "curation does not help":
 - The arms are not matched in training windows. A window is dropped if any of its 18 ticks is dropped, and random
   drops are scattered while fault drops cluster, so random arms lose about 7000 more windows (1.2%) for the same
   segment count. A nominally positive wm - random_wm would partly reflect this.
-The main arms (wm, rules, per-fault oracle) still run and are reported below when done; the gate is unchanged.
+### RQ4 main arms (2026-10-24): gate **FAIL**
+
+| arm | AUC | seed means | dropped segments | training windows | vs its random twin [95% CI] | vs full [95% CI] |
+|---|---|---|---|---|---|---|
+| full | 0.166 | 0.180 / 0.152 / 0.167 | 0 | 568390 | | |
+| **wm** | 0.165 | 0.155 / 0.151 / 0.190 | 2092 | 521240 | -0.003 [-0.013, +0.008] | -0.001 [-0.012, +0.010] |
+| random_wm | 0.168 | 0.179 / 0.161 / 0.164 | 2092 | ~506800 | | |
+| rules | 0.159 | 0.155 / 0.154 / 0.169 | 906 | 545235 | +0.002 [-0.009, +0.012] | -0.007 [-0.017, +0.004] |
+| random_rules | 0.158 | 0.162 / 0.146 / 0.166 | 906 | ~541200 | | |
+| oracle_hesitate | 0.154 | | 167 | 565138 | | -0.012 [-0.023, -0.000] |
+| oracle_wrong | 0.163 | | 166 | 565132 | | -0.003 [-0.014, +0.007] |
+| oracle_spike | 0.169 | | 234 | 564128 | | +0.003 [-0.009, +0.015] |
+| oracle_slip | 0.166 | | 96 | 566182 | | -0.000 [-0.011, +0.011] |
+
+World-model curation does not beat dropping the same number of random segments, even though the window confound
+favours it (random_wm trains on about 14000 fewer windows). Neither do the log rules, and no single fault kind hurts
+the policy when left in. The one nominally significant cell, removing hesitations, makes the policy worse, not better;
+with ten comparisons one marginal CI is about what chance gives. RQ4 is null here, as the oracle diagnostic predicted:
+at this policy strength and a 1.7% fault rate, the injected faults are not what limits the cloned policy.
+What would make RQ4 testable: a policy that reaches teleop-level coverage (more data, image or richer state, longer
+training) and a higher fault rate, then the same frozen gate.
 
 ## Running
 
