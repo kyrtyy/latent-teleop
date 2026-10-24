@@ -140,6 +140,16 @@ Caveat: condition 1 passes by 0.03 px, with one seed and on the third probe trie
 (every cell ≤ 0.54×). The data-scaling rate for the floor dropped (4× data gave only −30%), so the next gain is a
 finer readout (unpooled 16×16 tokens), not more episodes.
 
+**Seed replicates** (`seed_run.sh`, same data and hyperparameters, another training seed, 150k-step probe; the floor
+is a property of the probe, so condition 1 is shared). Block-moving windows, learned error (ratio to best baseline):
+
+| run | block px / deg @ 300 ms | block px / deg @ 600 ms | G1 |
+|---|---|---|---|
+| main (seed 0) | 5.68 / 2.23 (0.54 / 0.28) | 6.12 / 2.82 (0.34 / 0.20) | PASS |
+| seed 1 | 5.37 / 2.31 (0.51 / 0.29) | 5.85 / 2.74 (0.33 / 0.19) | PASS |
+
+Seed 2 and a second no-rollout ablation are running.
+
 `train.py` saves `<out>.resume` every eval and resumes from it. The first main run on .91 was killed at
 step 26k (no traceback, a desktop user had logged in) and was rerun on .55.
 
