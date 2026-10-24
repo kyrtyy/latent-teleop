@@ -114,6 +114,30 @@ class WMSafety:
         return moves(b[0].numpy(), b[1].numpy(), float(th[0]), float(th[1]))
 
 
+class BothSafety:
+    """Acts on the world model, and logs what true physics would have said for the same state and path."""
+
+    def __init__(self, wm):
+        self.wm, self.oracle, self.log = WMSafety(*wm), OracleSafety(), []
+
+    def __call__(self, ex, t, path):
+        w = self.wm(ex, t, path)
+        self.log.append((w, self.oracle(ex, t, path)))
+        return w
+
+
+def agree(seed, profile, max_ticks):
+    """Open-loop agreement of the wm stop decision with the oracle's, on the ticks the wm arm visits."""
+    op_rng, up_rng, down_rng = (np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(3))
+    env = make_env(seed)
+    op = ScriptedOperator(op_rng, full_state(env)[AGENT])
+    op.params["hesitate"] = 0.0
+    up, down = Link(Delay(profile, up_rng)), Link(Delay(profile, down_rng))
+    safety = BothSafety(_load_wm())
+    run_episode(env, PathOperator(op), up, down, max_ticks, executor=ChunkExecutor(env, full_state(env)[AGENT], True, safety))
+    return np.array(safety.log, bool).reshape(-1, 2)
+
+
 def run(seed, profile, arm, max_ticks, wm=None):
     op_rng, up_rng, down_rng = (np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(3))
     env = make_env(seed)
@@ -178,7 +202,7 @@ def _load_wm(ckpt="data/wm_main.pt", probe_ckpt="data_big/probe150k_p8.pt"):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["check", "run"])
+    ap.add_argument("cmd", choices=["check", "run", "agree"])
     ap.add_argument("--profiles", nargs="+", default=["50j", "150j", "150b", "300j", "300b"])
     ap.add_argument("--arms", nargs="+", default=ARMS)
     ap.add_argument("--n", type=int, default=200)
@@ -197,6 +221,18 @@ if __name__ == "__main__":
         assert b < a, (a, b)
         o = run(4, "300b", "oracle", 400)
         print(f"c3.py checks passed (300b pauses/min: setpoint {a:.1f}, blend {b:.1f}; oracle stops/min {o['stops_per_min']:.1f})")
+    elif args.cmd == "agree":
+        os.makedirs(args.out, exist_ok=True)
+        seeds = [args.seed * 1_000_003 + i for i in range(args.n)]
+        for profile in args.profiles:
+            with Pool(args.workers) as pool:
+                logs = pool.starmap(agree, [(s, profile, args.max_ticks) for s in seeds], chunksize=1)
+            x = np.concatenate(logs)
+            np.save(f"{args.out}/{profile}_agree.npy", x)
+            w, o = x[:, 0], x[:, 1]
+            print(f"{profile}: {len(x)} extrapolating ticks; oracle stops {o.mean():.2f}, wm stops {w.mean():.2f}; "
+                  f"agreement {(w == o).mean():.2f}; wm precision {(w & o).sum() / max(w.sum(), 1):.2f} "
+                  f"recall {(w & o).sum() / max(o.sum(), 1):.2f}", flush=True)
     else:
         os.makedirs(args.out, exist_ok=True)
         seeds = [args.seed * 1_000_003 + i for i in range(args.n)]

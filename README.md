@@ -243,6 +243,22 @@ slightly better, and the gain is significant at 50j, 150j and 150b. Jerk is unch
 Blending beats a hard switch by a small margin at every profile. Execution smoothness does not close the latency gap:
 coverage stays at the no-ghost level (C2's 0.29-0.30), because the operator still acts on a stale view.
 
+### C3 safety layer (secondary; N = 100 paired, vs `blend`)
+
+| Profile | arm | robot push (px) | push diff [95% CI] | AUC diff [95% CI] | stops/min |
+|---|---|---|---|---|---|
+| 300j | oracle | 123.1 -> 92.1 | [-37.4, -25.1] | -0.008 [-0.022, +0.006] | 296 |
+| 300j | wm | 123.1 -> 96.0 | [-33.1, -21.4] | -0.022 [-0.033, -0.011] | 342 |
+| 300b | oracle | 119.2 -> 91.5 | [-34.2, -21.4] | -0.013 [-0.027, +0.002] | 313 |
+| 300b | wm | 119.2 -> 94.1 | [-31.6, -18.8] | -0.025 [-0.037, -0.013] | 352 |
+
+Even true physics brings robot-initiated block motion down only by about a quarter: the rest is the block still
+sliding from pushes the operator commanded earlier, so oracle is the floor, not 0. On that scale the world model gets
+about 87-90% of the achievable reduction. It stops about 15% more often than oracle and pays for it: its coverage cost
+is significant (-0.02 to -0.025), oracle's is not. The world model stops for the right reason, but too often.
+Agreement with oracle is reported from closed-loop push and stops; an open-loop check (`c3.py agree`, both judges on
+the same state and path) is below once it finishes.
+
 ## C4 + RQ4: self-auditing demonstrations
 
 `c4.py` injects labelled faults into scripted-operator demonstrations (natural hesitations off, so clean episodes
@@ -300,6 +316,29 @@ RQ4 **PASSES** if AUC(wm) - AUC(random) > 0 with a paired-bootstrap 95% CI exclu
 arms, flag precision/recall and event recall per fault kind, per-profile AUROC, and the empirical false-alarm rate on
 the held-out clean set next to alpha. If `oracle` does not beat `random`, these faults do not hurt this policy and
 RQ4 is null for any detector.
+
+### RQ4 oracle diagnostic (2026-10-24): **null**
+
+`python gates.py rq4`. Coverage AUC on 200 paired held-out scenes, mean over 3 training seeds.
+
+| arm | AUC | seed means | dropped segments | training windows |
+|---|---|---|---|---|
+| full | 0.166 | 0.180 / 0.152 / 0.167 | 0 / 38742 | 568390 |
+| oracle | 0.163 | 0.181 / 0.150 / 0.159 | 663 | 555410 |
+| random_oracle | 0.164 | 0.150 / 0.178 / 0.166 | 663 | ~548400 |
+
+oracle - random_oracle: -0.002 [-0.012, +0.009]; oracle - full: -0.003 [-0.014, +0.007].
+
+Removing the true fault windows does not help, so by the rule above RQ4 is null for these faults. Read it as
+underpowered, not as "curation does not help":
+- The policy is weak. AUC 0.166 with 0.7% success, below delayed teleop with no ghost (0.29).
+- Training seeds alone span 0.15-0.18, more than any effect from removing 1.7% of segments could plausibly be.
+- The bootstrap resamples eval scenes only, with curves averaged over seeds, so the CI leaves out training-seed
+  variance.
+- The arms are not matched in training windows. A window is dropped if any of its 18 ticks is dropped, and random
+  drops are scattered while fault drops cluster, so random arms lose about 7000 more windows (1.2%) for the same
+  segment count. A nominally positive wm - random_wm would partly reflect this.
+The main arms (wm, rules, per-fault oracle) still run and are reported below when done; the gate is unchanged.
 
 ## Running
 
