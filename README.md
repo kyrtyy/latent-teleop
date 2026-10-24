@@ -256,8 +256,16 @@ Even true physics brings robot-initiated block motion down only by about a quart
 sliding from pushes the operator commanded earlier, so oracle is the floor, not 0. On that scale the world model gets
 about 87-90% of the achievable reduction. It stops about 15% more often than oracle and pays for it: its coverage cost
 is significant (-0.02 to -0.025), oracle's is not. The world model stops for the right reason, but too often.
-Agreement with oracle is reported from closed-loop push and stops; an open-loop check (`c3.py agree`, both judges on
-the same state and path) is below once it finishes.
+Open-loop agreement (`c3.py agree`, 20 episodes per profile; on every tick the wm arm extrapolates, both judges see
+the same state and path):
+
+| Profile | ticks | oracle stops | wm stops | agreement | wm precision | wm recall |
+|---|---|---|---|---|---|---|
+| 300j | 11157 | 0.26 | 0.30 | 0.91 | 0.78 | 0.91 |
+| 300b | 11534 | 0.25 | 0.30 | 0.90 | 0.75 | 0.89 |
+
+The world model catches about 90% of the stops physics calls for, and about a quarter of its stops are unneeded.
+That matches the closed-loop picture: right reason, slightly trigger-happy.
 
 ## C4 + RQ4: self-auditing demonstrations
 
