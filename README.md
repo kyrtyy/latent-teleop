@@ -162,9 +162,12 @@ is a property of the probe, so condition 1 is shared). Block-moving windows, lea
 | main (seed 0) | 5.68 / 2.23 (0.54 / 0.28) | 6.12 / 2.82 (0.34 / 0.20) | PASS |
 | seed 1 | 5.37 / 2.31 (0.51 / 0.29) | 5.85 / 2.74 (0.33 / 0.19) | PASS |
 | seed 2 | 5.42 / 2.27 (0.51 / 0.28) | 6.06 / 2.80 (0.34 / 0.20) | PASS |
+| no rollout loss, seed 1 | 10.70 / 7.09 (1.01 / 0.88) | 14.94 / 10.52 (0.84 / 0.74) | FAIL |
 
 Condition 2 holds on all three seeds with the worst ratio at 0.54, and the seed-to-seed spread is about 0.3 px.
-A second no-rollout ablation is running.
+The second no-rollout ablation fails again, scored with the same probe: without the rollout loss the model is no
+better than the baselines at 300 ms and 2-4x worse than the full model. The rollout loss, not the seed, is what
+makes the predictor useful.
 
 `train.py` saves `<out>.resume` every eval and resumes from it. The first main run on .91 was killed at
 step 26k (no traceback, a desktop user had logged in) and was rerun on .55.
