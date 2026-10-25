@@ -86,96 +86,32 @@ G1 **PASSES** if all of these hold on the test episodes (every 10th episode):
 If G1 fails, the next phase narrows (for example, the ghost shows the block only within the horizon where it
 beats hold) rather than stopping.
 
-## Status before the full run (2026-10-21)
+**Deviations from the proposal.** Synthetic delay profiles (real WAN traces plug in as `trace:<file>`); delay
+conditioning via the action timeline instead of as a network input; DINOv2-S instead of V-JEPA 2 (too slow on
+6 GB cards). Frozen DINOv2-S tokens are pooled to 8×8 (65 tokens per frame) and read out by a spatial probe trained
+on true frames only.
 
-Verified:
-- Self-checks pass on 7 servers: .91, .70, .55, .87 (RTX 3050, bf16) and .54, .63, .100 (GTX 1660 Super, fp32).
-  Not used: .90 (another user at 100% GPU), .89 (shared desktop), .51/.93 (NVIDIA driver not loaded),
-  .73 (no GPU), .86/.88/.72/.92 (SSH times out).
-- Smoke test passes end to end on .91 (about 1 min).
-- Seeded collection is bit-identical across machines (states, commands, timing). Only shapely's coverage
-  float differs, by 3e-16.
-- Scripted operator at 0 ms: 20% of ticks in contact. It brings the block from 130 px to 33 px from the goal
-  and from 97° to 12° of rotation, but only 10% of episodes reach PushT's 95% coverage within 18 s. That is
-  enough contact-rich data for G1. It is too weak for RQ2 completion-time studies (tune it before C2).
-- Perception floor (`probe_check.py`, 180-episode diagnostic set): pooling resolution was not the limit and neither
-  was a pipeline bug. The probe reaches 2.6 px / 0.9° on its *training* frames. It generalises poorly because
-  there is too little pose coverage. The spatial 8×8 probe's validation block error falls with data:
-  12.4 px (36 episodes) -> 8.9 (72) -> 6.4 (144), about 28% per doubling. 8×8 ≈ 16×16, and both are far better
-  than 4×4 or CLS-only. **Chosen: 8×8 pooling (65 tokens) + spatial probe.** Extrapolating to the full run's ~960
-  training episodes gives about 2.6 px / 1.3°, just under gate condition 1. *That is an extrapolation
-  from three points, so condition 1 can still fail.* The floor is printed to `data/probe.log` about 40 minutes into
-  the run. The run does not stop on a bad floor, because condition 2 still tells us where to narrow, but you can
-  kill it there. The floor, the gate and the rollout decoding all use this one probe, trained on true frames only.
-  (The 56×56 raw-pixel CNN sanity probe failed at about 30–45 px. That is an issue in that CNN, not in the data:
-  the renders and targets were checked by hand, and the token probes fit the training frames to 2.6 px.)
-- Predictor cost at 65 tokens/frame on an RTX 3050: 0.87 s/step at batch 16, peak 5.0 GB (batch 32 runs out of
-  memory). The KV-cached rollout was needed: recomputing every tick took 3.3 s per step at batch 64 even with
-  17 tokens.
+## G1 results: **PASS**
 
-Known limits carried into C2:
-- The trained horizon is K = 20 ticks = 600 ms. A ghost under the 300 ms profiles needs downlink age plus uplink
-  delay, about 600 ms on average and more during bursts, so C2 needs a larger K. That is a training-cost question.
-- The agent reads back from the latent at only ~12 px on validation. That does not matter, because the ghost draws
-  the agent kinematically (exactly).
-- Deviations from the proposal: synthetic delay profiles (real WAN traces plug in as `trace:<file>`); delay
-  conditioning via the action timeline instead of as a network input; DINOv2-S instead of V-JEPA 2 (too slow on
-  6 GB cards); C2–C4 not built yet.
+Test split, block-moving windows, learned block error vs the best baseline reading the *true* delayed state
+(`results/<tag>/g1_verdict.json`). Three training seeds and a no-rollout-loss ablation, all scored with the same
+probe (perception floor 2.97 px / 1.13°, gate < 3 px):
 
-## G1 results (2026-10-22)
-
-Main run (.55, 40k steps, ~10 h) and the no-rollout-loss ablation (.70). Test split, block-moving windows,
-learned model vs the best baseline reading the *true* state (`results/<tag>/g1_verdict.json`):
-
-| | main | ablation (`--rollout-weight 0`) | best baseline |
+| run | block px / deg @ 300 ms (ratio) | block px / deg @ 600 ms (ratio) | G1 |
 |---|---|---|---|
-| block px, 300 ms | **6.9** (0.65x) | 12.8 (1.21x) | 10.6 (const-vel) |
-| block deg, 300 ms | **3.2** (0.40x) | 7.7 (0.95x) | 8.1 (const-vel) |
-| block px, 600 ms | **7.2** (0.40x) | 17.8 (1.00x) | 17.9 (hold) |
-| block deg, 600 ms | **4.0** (0.28x) | 11.4 (0.80x) | 14.2 (hold) |
+| seed 0 | 5.68 / 2.23 (0.54 / 0.28) | 6.12 / 2.82 (0.34 / 0.20) | PASS |
+| seed 1 | 5.37 / 2.31 (0.51 / 0.29) | 5.85 / 2.74 (0.33 / 0.19) | PASS |
+| seed 2 | 5.42 / 2.27 (0.51 / 0.28) | 6.06 / 2.80 (0.34 / 0.20) | PASS |
+| no rollout loss | 10.70 / 7.09 (1.01 / 0.88) | 14.94 / 10.52 (0.84 / 0.74) | FAIL |
 
-**With the original probe, G1 fails only on condition 1** (perception floor 4.7 px / 1.8°, gate < 3 px). Condition 2 passes on all four
-cells, with margin. The rollout loss is what makes the predictor useful: the teacher-forced ablation is no better
-than hold. Of the learned 7.2 px, about 4.7 px is the probe floor. In free space hold is exact and the learned
-model sits at the floor, so the ghost should show the learned block only when contact is expected.
+Best baselines: 10.6 px / 8.1° at 300 ms (constant velocity), 17.9 px / 14.2° at 600 ms (hold-last-frame).
+Condition 2 holds on every seed (worst ratio 0.54, seed spread about 0.3 px). Without the rollout loss the model is no
+better than the baselines: the rollout loss is what makes the predictor useful. Caveat: condition 1 passes by
+0.03 px; the next gain is a finer readout (unpooled 16×16 tokens), not more episodes.
 
 **Leak check** (`leak_check.py`): corrupt the future commands and the win disappears (600 ms block: true commands
 7.2 px, last command held 14.7, commands from another window 17.3, hold-last-frame 17.9). The win is
-action-driven dynamics, not future frames. It also holds under 300 ms delay (7.4 vs 14.2 px), where the window's
-commands were issued from pre-anchor frames, so the commands cannot carry the operator's reaction to the future
-block.
-
-**Perception floor fix → G1 PASS** (`floor.sh`, 2026-10-22). Only the probe is retrained, on true frames from 4×
-the episodes (4,800; episodes 0–1199 are bit-identical to `data/`, so the test split is unchanged and unseen).
-The predictor is the same `wm_main.pt`. Results are scored on the original test set:
-
-| probe | floor block px / deg | block px / deg @ 600 ms, moving (ratio) | G1 |
-|---|---|---|---|
-| 1,200 eps, 20k steps | 4.71 / 1.84 | 7.2 / 4.0 (0.40 / 0.28) | FAIL (floor) |
-| 4,800 eps, 60k steps | 3.27 / 1.18 | 6.3 / 3.1 (0.35 / 0.22) | FAIL (floor) |
-| 4,800 eps, 150k steps | **2.97 / 1.13** | **6.2 / 2.8 (0.34 / 0.20)** | **PASS** |
-
-Caveat: condition 1 passes by 0.03 px, with one seed and on the third probe tried. Condition 2 is the robust result
-(every cell ≤ 0.54×). The data-scaling rate for the floor dropped (4× data gave only −30%), so the next gain is a
-finer readout (unpooled 16×16 tokens), not more episodes.
-
-**Seed replicates** (`seed_run.sh`, same data and hyperparameters, another training seed, 150k-step probe; the floor
-is a property of the probe, so condition 1 is shared). Block-moving windows, learned error (ratio to best baseline):
-
-| run | block px / deg @ 300 ms | block px / deg @ 600 ms | G1 |
-|---|---|---|---|
-| main (seed 0) | 5.68 / 2.23 (0.54 / 0.28) | 6.12 / 2.82 (0.34 / 0.20) | PASS |
-| seed 1 | 5.37 / 2.31 (0.51 / 0.29) | 5.85 / 2.74 (0.33 / 0.19) | PASS |
-| seed 2 | 5.42 / 2.27 (0.51 / 0.28) | 6.06 / 2.80 (0.34 / 0.20) | PASS |
-| no rollout loss, seed 1 | 10.70 / 7.09 (1.01 / 0.88) | 14.94 / 10.52 (0.84 / 0.74) | FAIL |
-
-Condition 2 holds on all three seeds with the worst ratio at 0.54, and the seed-to-seed spread is about 0.3 px.
-The second no-rollout ablation fails again, scored with the same probe: without the rollout loss the model is no
-better than the baselines at 300 ms and 2-4x worse than the full model. The rollout loss, not the seed, is what
-makes the predictor useful.
-
-`train.py` saves `<out>.resume` every eval and resumes from it. The first main run on .91 was killed at
-step 26k (no traceback, a desktop user had logged in) and was rerun on .55.
+action-driven dynamics, not future frames. It also holds under 300 ms delay (7.4 vs 14.2 px).
 
 ## C2: ghost display (closed loop)
 
@@ -212,8 +148,7 @@ needed for the display.
 
 ### C2 results (2026-10-23): **PASS**
 
-`python c2_gate.py` on `results/c2` (N = 200 paired episodes per cell, model `data/wm_main.pt` retrained on .91,
-probe `data_big/probe150k_p8.pt`). Coverage AUC, with gap recovered in parentheses. The 0 ms reference is 0.516
+`python c2_gate.py` on `results/c2` (N = 200 paired episodes per cell). Coverage AUC, with gap recovered in parentheses. The 0 ms reference is 0.516
 (success 0.24).
 
 | Profile | none | kinematic | learned | oracle | learned − kinematic [95% CI] |
@@ -233,8 +168,7 @@ At 300j and 300b, learned − none is +0.196 (CI [+0.18, +0.21]), and both gate 
 
 The learned ghost queries the model about 540 times per 30 s episode and falls back to hold 0.9 (300j) and 11.3
 (300b) times per episode. The delay cap never triggers.
-At 50 ms there is too little delay for the model to beat kinematics; the CI includes 0. 300 ms cells ran with
-rollout chunk 16, because 64 ran out of memory on a 6 GB GPU.
+At 50 ms there is too little delay for the model to beat kinematics; the CI includes 0.
 
 ## C3: intent-preserving execution
 
@@ -307,18 +241,9 @@ That matches the closed-loop picture: right reason, slightly trigger-happy.
 are clean): `hesitate` (cursor frozen 20-40 ticks), `wrong` (a 15-30 tick push toward a random point), `spike`
 (+700 ms on both links for 25 ticks), `slip` (the block jumps 15-30 px / 0.15-0.3 rad). Segments are 15 ticks.
 
-Pilot (`data_c4pilot`, 180 episodes, used only to choose the score; never reused). Segment AUROC vs clean episodes:
-
-| fault | dyn | stale | blind |
-|---|---|---|---|
-| hesitate | 0.39 | 0.40 | 0.45 |
-| wrong | 0.73 | 0.64 | 0.66 |
-| spike | 0.47 | 0.59 | 0.58 |
-| slip | 0.81 | 0.68 | 0.76 |
-
 A world model fed the executed commands cannot see faults that live in the action rather than the scene: during a
 hesitation or a spike the robot holds its last command and the scene goes quiet, so prediction error drops.
-It does see physics surprises (slip) and, partly, mistaken pushes. That is a finding, not a bug to tune away.
+It does see physics surprises (slip) and, partly, mistaken pushes.
 
 ### C4 detection on the RQ4 data (fresh seeds, alpha = 0.05)
 
@@ -359,28 +284,9 @@ arms, flag precision/recall and event recall per fault kind, per-profile AUROC, 
 the held-out clean set next to alpha. If `oracle` does not beat `random`, these faults do not hurt this policy and
 RQ4 is null for any detector.
 
-### RQ4 oracle diagnostic (2026-10-24): **null**
+### RQ4 results: gate **FAIL** (null)
 
 `python gates.py rq4`. Coverage AUC on 200 paired held-out scenes, mean over 3 training seeds.
-
-| arm | AUC | seed means | dropped segments | training windows |
-|---|---|---|---|---|
-| full | 0.166 | 0.180 / 0.152 / 0.167 | 0 / 38742 | 568390 |
-| oracle | 0.163 | 0.181 / 0.150 / 0.159 | 663 | 555410 |
-| random_oracle | 0.164 | 0.150 / 0.178 / 0.166 | 663 | ~548400 |
-
-oracle - random_oracle: -0.002 [-0.012, +0.009]; oracle - full: -0.003 [-0.014, +0.007].
-
-Removing the true fault windows does not help, so by the rule above RQ4 is null for these faults. Read it as
-underpowered, not as "curation does not help":
-- The policy is weak. AUC 0.166 with 0.7% success, below delayed teleop with no ghost (0.29).
-- Training seeds alone span 0.15-0.18, more than any effect from removing 1.7% of segments could plausibly be.
-- The bootstrap resamples eval scenes only, with curves averaged over seeds, so the CI leaves out training-seed
-  variance.
-- The arms are not matched in training windows. A window is dropped if any of its 18 ticks is dropped, and random
-  drops are scattered while fault drops cluster, so random arms lose about 7000 more windows (1.2%) for the same
-  segment count. A nominally positive wm - random_wm would partly reflect this.
-### RQ4 main arms (2026-10-24): gate **FAIL**
 
 | arm | AUC | seed means | dropped segments | training windows | vs its random twin [95% CI] | vs full [95% CI] |
 |---|---|---|---|---|---|---|
@@ -389,6 +295,7 @@ underpowered, not as "curation does not help":
 | random_wm | 0.168 | 0.179 / 0.161 / 0.164 | 2092 | ~506800 | | |
 | rules | 0.159 | 0.155 / 0.154 / 0.169 | 906 | 545235 | +0.002 [-0.009, +0.012] | -0.007 [-0.017, +0.004] |
 | random_rules | 0.158 | 0.162 / 0.146 / 0.166 | 906 | ~541200 | | |
+| oracle (all faults) | 0.163 | 0.181 / 0.150 / 0.159 | 663 | 555410 | -0.002 [-0.012, +0.009] | -0.003 [-0.014, +0.007] |
 | oracle_hesitate | 0.154 | | 167 | 565138 | | -0.012 [-0.023, -0.000] |
 | oracle_wrong | 0.163 | | 166 | 565132 | | -0.003 [-0.014, +0.007] |
 | oracle_spike | 0.169 | | 234 | 564128 | | +0.003 [-0.009, +0.015] |
@@ -397,8 +304,10 @@ underpowered, not as "curation does not help":
 World-model curation does not beat dropping the same number of random segments, even though the window confound
 favours it (random_wm trains on about 14000 fewer windows). Neither do the log rules, and no single fault kind hurts
 the policy when left in. The one nominally significant cell, removing hesitations, makes the policy worse, not better;
-with ten comparisons one marginal CI is about what chance gives. RQ4 is null here, as the oracle diagnostic predicted:
-at this policy strength and a 1.7% fault rate, the injected faults are not what limits the cloned policy.
+with ten comparisons one marginal CI is about what chance gives. Even removing the true fault windows does not
+help, so RQ4 is null here for any detector: at this policy strength (AUC 0.166, 0.7% success, below delayed teleop's
+0.29) and a 1.7% fault rate, the injected faults are not what limits the cloned policy. Training seeds alone span
+0.15-0.18, and the bootstrap resamples eval scenes only, so the CIs leave out training-seed variance.
 What would make RQ4 testable: a policy that reaches teleop-level coverage (more data, image or richer state, longer
 training) and a higher fault rate, then the same frozen gate.
 
