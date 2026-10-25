@@ -6,17 +6,22 @@ model trained on frozen DINOv2 features predicts what the robot's scene looks li
 simulated delayed network. Results: G1 (prediction), C2 (ghost display) and C3 (intent-preserving execution) pass
 their pre-registered gates; RQ4 (curating demonstrations with the world model) is null.
 
-## Demo (300 ms jittery delay, real time)
+## Demo (300 ms jittery delay each way, real time)
+
+**Video (45 s, with captions):** [assets/demo.mp4](assets/demo.mp4)
 
 What the operator receives, what the learned ghost predicts, and what is really there at that moment:
 
 ![ghost](assets/ghost.gif)
 
-The same scene, operator and network delays, without and with the ghost:
+The same scene, operator and network delays with three displays: no ghost, the classical Smith predictor (robot
+replayed, block held) and the learned ghost. Bars show how much of the target the block covers (95% = done):
 
 ![compare](assets/compare.gif)
 
-`python demo.py` regenerates both (one scene, 300j; the world model runs on CPU in about a minute).
+`python demo.py` regenerates all three (one scene, 300j; the world model runs on CPU in about a minute). This scene
+was picked because the ghost run succeeds and the no-ghost run does not; across 200 scenes success goes from 4% to
+about 20%.
 
 ## Files
 
@@ -36,7 +41,7 @@ The same scene, operator and network delays, without and with the ghost:
 | `c3.py` | C3: path operator, chunk executor with blending, world-model / oracle safety layer |
 | `c4.py` | C4: fault injection, segment scores, conformal flags |
 | `policy.py` | RQ4: state-based diffusion policy, curation arms, autonomous evaluation |
-| `demo.py` | the README GIFs |
+| `demo.py` | the README GIFs and demo video |
 | `leak_check.py` | re-runs the G1 rollout with corrupted future commands, per delay profile |
 | `smoke.sh` | end-to-end run on tiny data; must print `SMOKE OK` |
 | `fleet.sh` | push code to servers, build the venv, run the self-checks: `./fleet.sh 91 70 55` |
