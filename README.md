@@ -161,8 +161,10 @@ is a property of the probe, so condition 1 is shared). Block-moving windows, lea
 |---|---|---|---|
 | main (seed 0) | 5.68 / 2.23 (0.54 / 0.28) | 6.12 / 2.82 (0.34 / 0.20) | PASS |
 | seed 1 | 5.37 / 2.31 (0.51 / 0.29) | 5.85 / 2.74 (0.33 / 0.19) | PASS |
+| seed 2 | 5.42 / 2.27 (0.51 / 0.28) | 6.06 / 2.80 (0.34 / 0.20) | PASS |
 
-Seed 2 and a second no-rollout ablation are running.
+Condition 2 holds on all three seeds with the worst ratio at 0.54, and the seed-to-seed spread is about 0.3 px.
+A second no-rollout ablation is running.
 
 `train.py` saves `<out>.resume` every eval and resumes from it. The first main run on .91 was killed at
 step 26k (no traceback, a desktop user had logged in) and was rerun on .55.
